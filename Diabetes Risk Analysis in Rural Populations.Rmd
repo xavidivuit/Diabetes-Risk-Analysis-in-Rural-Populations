@@ -1,0 +1,652 @@
+---
+title: "Diabetes Risk Analysis in Rural Populations"
+author: "Xavier Tarragó"
+date: "2026-01-13"
+output: html_document
+runtime: shiny
+---
+
+# ***1. Introduction and Theoretical Framework***
+
+## ***1.1 Study context and objective***
+
+This study uses a dataset extracted from the Vanderbilt Biostatistics Datasets (https://hbiostat.org/data/repo/cdiabetes), provided by Dr. John Schorling from the Department of Medicine, University of Virginia School of Medicine. The dataset includes clinical, anthropometric and biochemical information from 403 subjects evaluated in a rural African American population in Virginia. Available variables include blood glucose, glycosylated haemoglobin (HbA1c), total cholesterol, high-density lipoproteins (HDL), blood pressure, age, sex, height, weight, and waist and hip measurements. Not all participants have Type II diabetes (adult-onset diabetes); an individual is considered diabetic if their HbA1c exceeds 7%, indicating poor glycaemic control over the previous 2–3 months (Willems et al., 1997; Schorling et al., 1997). The diversity of variables enables a multidimensional analysis of metabolic and cardiovascular risk factors, including central obesity, hypertension and other indicators related to Metabolic Syndrome. Research questions include: identifying the main predictors of Type II diabetes, studying how central obesity and other anthropometric measures relate to cardiovascular and metabolic risk, and exploring the presence of risk subgroups within the evaluated population.
+
+References:
+
+1. Willems JP, Saunders JT, DE Hunt, JB Schorling: Prevalence of coronary heart disease risk factors among rural blacks: A community-based study. Southern Medical Journal 90:814-820; 1997
+and
+2. Schorling JB, Roach J, Siegel M, Baturka N, Hunt DE, Guterbock TM, Stewart HL: A trial of church-based smoking cessation interventions for rural African Americans. Preventive Medicine 26:92-101; 1997.
+
+## ***1.2 Main research questions***
+
+1. Type II Diabetes Predictors: Which anthropometric and clinical variables — such as body mass index (BMI), waist/hip ratio, Cholesterol/HDL ratio and blood pressure — are most strongly associated with the presence of Type II diabetes mellitus, defined as HbA1c > 7.0, in this rural African American population of Central Virginia?
+
+2. Waist/Hip Ratio as a marker: Is there a significant association between the waist/hip ratio, HbA1c levels and the cholesterol/HDL ratio? Can the waist/hip ratio be considered an early marker of Type II diabetes risk in African Americans from Central Virginia?
+
+3. Hypertension and Diabetes — Syndrome X: What is the relationship between blood pressure (systolic and diastolic) and HbA1c in this population? Can a pattern consistent with "Syndrome X" (a combination of hypertension and Type II diabetes) be identified?
+
+4. Risk subgroups: Using clustering on variables such as glucose, HbA1c, cholesterol, HDL, blood pressure, waist/hip ratio and age, can subgroups of patients with distinct metabolic and cardiovascular risk profiles be identified?
+
+5. Age and metabolic progression: Visually analyse how age relates to HbA1c, stabilised glucose and blood pressure. Is a progressive increase in metabolic risk with age observed in this population?
+
+6. Postprandial time and biomarkers: Does postprandial time (time.ppn) influence stabilised glucose levels? And HbA1c?
+
+7. Sex differences in metabolic risk: Are there significant differences between men and women in HbA1c, stabilised glucose and blood pressure?
+
+# ***2. Data Preparation and Exploratory Data Analysis (EDA)***
+
+First, we examine the first 10 rows of our variables to get an overview of the data:
+
+```{r, warning=FALSE}
+
+library(readr)
+
+# Import the file and display the first records
+data <- read_csv("diabetes.csv", show_col_types = FALSE)
+
+# Convert to data frame for a cleaner table view
+data_df <- as.data.frame(data)
+
+# Display the first 10 rows
+head(data_df, 10)
+```
+
+We can see that we have 19 variables, with some NAs that will need to be handled. It is useful to look at the variable types (numeric, categorical...) to plan subsequent analyses and decide how to manage them.
+
+### Variable types and dataset dimensions
+
+```{r}
+str(data)
+dim(data)
+```
+
+The dataset contains 403 observations and 19 variables. Most are numeric, reflecting health indicators and physical measurements, except for three categorical variables (location, gender and frame) that allow individuals to be grouped and compared. Each record has a unique identifier (id).
+
+### Number of NAs in the dataset
+
+```{r}
+table(is.na(data))
+```
+
+Out of a total of 7,657 cells, 7,082 are complete and 575 contain NAs.
+
+### Variables with missing values
+
+```{r}
+colSums(is.na(data))
+```
+
+The variables bp.2s (second systolic blood pressure measurement) and bp.2d (second diastolic blood pressure measurement) have 262 missing values out of 403 observations, accounting for more than 60% of missing data. Due to this high proportion of absent values, these variables are excluded from subsequent analyses. Blood pressure analyses will therefore be performed using only the first measurement (bp.1s and bp.1d). For the remaining variables, all NAs are removed.
+
+```{r, message=FALSE}
+library(dplyr)
+
+# Remove only the bp.2s and bp.2d variables
+data_bp <- data %>%
+  select(-bp.2s, -bp.2d)
+
+# Verify the operation was performed correctly
+colSums(is.na(data_bp))
+dim(data_bp)
+
+# Remove remaining NAs
+data_clean <- na.omit(data_bp)
+
+# Verify the result
+colSums(is.na(data_clean))
+dim(data_clean)
+```
+
+The variables have been correctly removed.
+
+### Outlier detection and assessment
+
+```{r}
+# Select only numeric variables
+num_vars <- data_clean %>% 
+  select(where(is.numeric))
+
+# Function to count outliers using the IQR criterion
+count_outliers <- function(x) {
+  Q1 <- quantile(x, 0.25)
+  Q3 <- quantile(x, 0.75)
+  IQR <- Q3 - Q1
+  sum(x < (Q1 - 1.5 * IQR) | x > (Q3 + 1.5 * IQR))
+}
+
+# Number of outliers per variable
+outliers_count <- sapply(num_vars, count_outliers)
+outliers_count
+
+# Remove the id variable before plotting, as it is not a meaningful numeric variable
+num_vars_no_id <- data_clean %>%
+  select(where(is.numeric), -id)
+
+# Standardise the variables
+num_scaled <- scale(num_vars_no_id)
+
+boxplot(num_scaled,
+        main = "Boxplots of standardised numeric variables",
+        las = 2,
+        col = "lightblue")
+```
+
+The boxplots and IQR-based outlier detection show numerous extreme values in several clinical variables, particularly in stabilised glucose and HbA1c. This is expected in a biomedical dataset that includes individuals with very diverse metabolic profiles. For this reason, outliers are considered valid observations and are retained in the analysis.
+
+### Descriptive analysis of numeric variables (excluding id)
+
+```{r}
+
+# Parametric descriptive summary
+summary_stats <- data.frame(
+  Mean    = sapply(num_vars_no_id, mean),
+  Std_Dev = sapply(num_vars_no_id, sd),
+  Min     = sapply(num_vars_no_id, min),
+  Max     = sapply(num_vars_no_id, max)
+)
+
+round(summary_stats, 2)
+
+# Histograms of all numeric variables (excluding id)
+par(mfrow = c(1, 3))  
+
+for (v in names(num_vars_no_id)) {
+  hist(num_vars_no_id[[v]],
+       main = paste("Histogram of", v),
+       xlab = v,
+       col = "lightblue",
+       border = "white")
+}
+```
+
+### Distribution of categorical variables
+
+```{r}
+
+# Display 3 bar charts in a single row
+par(mfrow = c(1, 3))
+
+# First chart: gender distribution
+barplot(table(data_clean$gender),
+        main = "Distribution by gender",
+        col = "lightgreen")
+
+# Second chart: location distribution
+barplot(table(data_clean$location),
+        main = "Distribution by location",
+        col = "lightgreen")
+
+# Third chart: frame (body build) distribution
+barplot(table(data_clean$frame),
+        main = "Distribution by frame",
+        col = "lightgreen")
+```
+
+The sample includes more women than men, is evenly distributed between the Buckingham and Louisa localities, and is predominantly composed of participants with a medium frame compared to large or small.
+
+# ***3. Inference and Metabolic Probability***
+
+## ***3.1 General Prevalence Analysis***
+
+### Function to calculate the proportion of individuals with diabetes (HbA1c > 7)
+
+```{r}
+# Function that calculates the proportion of people with diabetes: glycosylated haemoglobin > 7
+proportion_diabetes <- function(data, threshold = 7.0) {
+  
+  # Logical vector: TRUE if glyhb > threshold
+  diabetes <- data$glyhb > threshold
+  
+  # Proportion of positive cases
+  prop <- mean(diabetes)
+  
+  return(prop)
+}
+
+# Apply the function
+proportion_diabetes(data_clean)
+```
+
+Approximately 15% of individuals in the dataset have glycosylated haemoglobin values consistent with a diabetes diagnosis.
+
+## ***3.2 Demographic Factors and Probability***
+
+### Proportion of men and women with HbA1c > 7.0 (diabetes)
+
+```{r}
+# Proportion of men with diabetes
+mean(data_clean$glyhb[data_clean$gender == "male"] > 7.0)
+
+# Proportion of women with diabetes
+mean(data_clean$glyhb[data_clean$gender == "female"] > 7.0)
+
+# Conclusion: The proportion of men with diabetes (glyhb > 7.0) is slightly higher at 15.8%, compared to women at 14.95%. This suggests that, although the difference is not large, men show a somewhat higher prevalence of diabetes than women in this sample.
+```
+
+### Probability of a positive diabetes diagnosis in individuals over 50
+
+```{r}
+# Proportion of diabetes in people over 50 years of age
+diabetes_over50 <- data_clean$glyhb[data_clean$age > 50] > 7.0
+prop_over50 <- mean(diabetes_over50)
+prop_over50
+
+# Conclusion: Approximately 28% of people over 50 have diabetes.
+```
+
+### Is there a relationship between high cholesterol (>240) and diabetes in people over 50?
+
+```{r}
+chol_over50 <- data_clean$chol[data_clean$age > 50]
+prop_over50_highchol <- mean(diabetes_over50[chol_over50 > 240])
+prop_over50_highchol
+
+# Conclusion: The proportion of diabetes increases considerably (to approximately 44%) when combining advanced age and high cholesterol.
+```
+
+### Among people over 50, who has a higher probability of diabetes — men or women?
+
+```{r}
+# Filter gender among people over 50
+gender_over50 <- data_clean$gender[data_clean$age > 50]
+
+# Proportion by gender
+prop_over50_men   <- mean(diabetes_over50[gender_over50 == "male"])
+prop_over50_women <- mean(diabetes_over50[gender_over50 == "female"])
+prop_over50_men
+prop_over50_women
+
+# Conclusion: Although men generally show a higher probability of diabetes, when specifically analysing women over 50, they present a slightly higher risk than men of the same age. This indicates that the relationship between gender and diabetes may vary by age group, highlighting the importance of considering age in risk analysis.
+```
+
+### Are there differences between localities in the prevalence of diabetes in people over 50?
+
+```{r}
+location_over50 <- data_clean$location[data_clean$age > 50]
+tapply(diabetes_over50, location_over50, mean)
+
+# Conclusion: Among people over 50, diabetes prevalence varies by locality, being higher in Buckingham (30.1%) than in Louisa (25.7%). This suggests that local factors, such as environment, lifestyle or access to healthcare, may influence diabetes risk.
+```
+
+### Among people with a Cholesterol/HDL Ratio in the moderate risk range (3.5–5), what proportion has HbA1c > 7.0?
+
+```{r}
+mean(data_clean$glyhb[data_clean$ratio > 3.5 & data_clean$ratio <= 5] > 7.0)
+
+# Conclusion: Among people with a Cholesterol/HDL Ratio in the moderate risk range (3.5–5), approximately 13.4% have glycosylated haemoglobin above 7.0, indicating diabetes. This shows that even at moderate cholesterol risk levels, a significant proportion of individuals may have diabetes, underscoring the need for additional metabolic monitoring in this group.
+```
+
+### And those with a ratio in the high risk range (>5)?
+
+```{r}
+diabetes_high_ratio <- data_clean$glyhb[data_clean$ratio > 5] > 7.0
+
+# Total proportion
+prop_high_ratio <- mean(diabetes_high_ratio)
+prop_high_ratio
+
+# Conclusion: Among people with a Cholesterol/HDL Ratio in the high risk range (>5), approximately 24.4% have glycosylated haemoglobin above 7.0, indicating diabetes. This is almost double the proportion in the moderate risk group, reinforcing the relationship between a higher Cholesterol/HDL ratio and diabetes risk.
+```
+
+## ***3.3 Simulation model to predict the probability that an individual has HbA1c > 7.0 (diabetes)***
+
+```{r}
+set.seed(123)
+
+# Observed HbA1c parameters
+mean_glyhb <- mean(data_clean$glyhb)
+sd_glyhb   <- sd(data_clean$glyhb)
+
+# Simulation of 1000 individuals
+glyhb_sim <- rnorm(1000, mean = mean_glyhb, sd = sd_glyhb)
+```
+
+```{r}
+mean(glyhb_sim > 7.0)
+
+# Conclusion: The actual proportion of people with diabetes in the dataset is 15.3%, whereas a simulation based on a normal distribution of HbA1c overestimates this risk at 26.5%. This indicates that, while the simulation can provide a theoretical estimate of prevalence, real data show that diabetes affects a smaller proportion of the population. Therefore, for accurate estimates, it is crucial to rely on observed data and to consider individual factors such as age, gender and metabolic risk.
+```
+
+The dataset used in this study contains indicator variables such as total cholesterol, blood pressure, and waist and hip measurements. However, it also contains an outcome variable: the percentage of glycosylated haemoglobin (HbA1c). In the original study, if this variable exceeds 7, the individual is considered diabetic. Therefore, the best approach for this data is a supervised learning model.
+
+# ***4. Analysis of Critical Predictors: Answering the Research Questions***
+
+### 1. Which anthropometric and clinical variables — such as BMI, waist/hip ratio, Cholesterol/HDL ratio and blood pressure — are most strongly associated with Type II diabetes (HbA1c > 7.0) in this rural African American population of Central Virginia?
+
+```{r}
+# Add a new variable (waist_hip) representing the waist/hip ratio
+data_clean$waist_hip <- data_clean$waist / data_clean$hip
+
+# Convert frame to numeric
+data_clean$frame <- as.numeric(factor(data_clean$frame, levels = c('small','medium','large'), labels = c(1,2,3)))
+```
+
+```{r}
+# Calculate BMI = weight (kg) / height (m)^2
+data_clean$bmi <- data_clean$weight / ((data_clean$height / 100)^2)
+
+# Convert frame (body build) to numeric: small=1, medium=2, large=3
+data_clean$frame <- as.numeric(factor(data_clean$frame,
+                                      levels = c('small','medium','large'),
+                                      labels = c(1,2,3)))
+
+# Binary variable: 1 = diabetes (HbA1c > 7), 0 = no diabetes
+data_clean$diabetes <- ifelse(data_clean$glyhb > 7, 1, 0)
+
+# Verify proportions
+table(data_clean$diabetes)
+```
+
+We have 310 healthy individuals and 56 with diabetes.
+
+```{r}
+library(ggplot2)
+
+# BMI histogram by diabetes status
+ggplot(data_clean, aes(x = bmi, fill = factor(diabetes))) +
+  geom_histogram(position = "dodge", bins = 30, color = "black") +
+  labs(fill = "Diabetes", x = "BMI", y = "Frequency") +
+  theme_minimal()
+
+# Waist/hip ratio boxplot by diabetes status
+ggplot(data_clean, aes(x = factor(diabetes), y = waist_hip)) +
+  geom_boxplot(fill = c("lightblue", "salmon")) +
+  labs(x = "Diabetes", y = "Waist/Hip Ratio") +
+  theme_minimal()
+
+# Cholesterol/HDL ratio boxplot by diabetes status
+ggplot(data_clean, aes(x = factor(diabetes), y = ratio)) +
+  geom_boxplot(fill = c("lightgreen", "orange")) +
+  labs(x = "Diabetes", y = "Cholesterol/HDL Ratio") +
+  theme_minimal()
+
+# Select relevant predictor variables
+vars_pred <- c("bmi", "waist_hip", "ratio", "bp.1s", "bp.1d")
+
+# Build the formula
+formula_logit <- as.formula(paste("diabetes ~", paste(vars_pred, collapse = "+")))
+
+# Fit the logistic regression model
+modelo_logit <- glm(formula_logit, data = data_clean, family = binomial)
+
+# Model summary
+summary(modelo_logit)
+
+# Conclusion: Integrating the statistical model and the visual evidence from the charts, the Cholesterol/HDL ratio emerges as the most critical and reliable biomarker for predicting diabetes in this population, showing the highest statistical significance (p = 0.00022) and a clear visual differentiation in the group medians. Systolic blood pressure (p = 0.00413) is also a robust predictor, evidencing a strong link between cardiovascular and metabolic risk in this sample. In contrast, traditional anthropometric variables such as BMI and waist/hip ratio, although showing an upward trend in the charts for the diabetic group, have lower statistical significance in the model (p > 0.05).
+```
+
+### 2. Is there a significant association between the waist/hip ratio, HbA1c levels and the Cholesterol/HDL ratio? Can the waist/hip ratio be considered an early marker of Type II diabetes risk in African Americans from Central Virginia?
+
+```{r}
+# Correlation between the variables of interest
+cor.test(data_clean$waist_hip, data_clean$glyhb)
+```
+
+```{r}
+cor.test(data_clean$waist_hip, data_clean$ratio)
+```
+
+```{r}
+cor.test(data_clean$ratio, data_clean$glyhb)
+
+# Conclusion: The correlation analysis shows that the waist/hip ratio is positively related to both HbA1c levels (r = 0.216, p < 0.001) and the Cholesterol/HDL ratio (r = 0.256, p < 0.001). Furthermore, the Cholesterol/HDL ratio also correlates positively with HbA1c (r = 0.355, p < 0.001). Although the correlations are moderate and below 0.5, all are statistically significant, indicating a consistent association between these variables.
+```
+
+We now assess whether the waist/hip ratio can serve as an early marker for diabetes or cardiovascular disease.
+
+According to the Madrid Society of Pulmonology and Thoracic Surgery (NEUMOMADRID), in men the waist/hip ratio is associated with risk when it exceeds 0.94, while in women this threshold is 0.84. We therefore separate the data by gender.
+
+```{r}
+# Create the diagnosis variable and convert to numeric
+data_clean$diagnostico <- ifelse(data_clean$glyhb > 7, 1, 0)
+
+# Convert gender to numeric
+data_clean$gender <- ifelse(data_clean$gender == 'male', 1, 2)
+```
+
+```{r}
+women <- subset(data_clean, gender == 2)
+men   <- subset(data_clean, gender == 1)
+```
+
+```{r}
+# Create a variable indicating which women exceed the waist/hip threshold
+women$high <- women$waist_hip > 0.84
+table_women <- table(women$high, women$diagnostico)
+
+# Chi-square test to assess whether the ratio is associated with diagnosis
+chisq.test(table_women)
+```
+
+```{r}
+# Repeat for men
+men$high <- men$waist_hip > 0.94
+table_men <- table(men$high, men$diagnostico)
+chisq.test(table_men)
+
+# Conclusion: Both chi-square p-values are below 0.05, which means we can conclude that a waist/hip ratio above 0.84 in women and above 0.94 in men is a risk marker for Type II Diabetes Mellitus.
+```
+
+## ***4.1. Multidimensional Analysis and Biological Patterns***
+
+### 3. What is the relationship between blood pressure (systolic and diastolic) and HbA1c in this population? Can a pattern consistent with "Syndrome X" (a combination of hypertension and Type II diabetes) be identified?
+
+The WHO defines hypertension as systolic blood pressure ≥ 140 mmHg and diastolic blood pressure ≥ 90 mmHg. We first visualise the relationship between these variables graphically.
+
+```{r, message=FALSE} 
+library(ggplot2)
+ggplot(data_clean, aes(x = bp.1s, y = glyhb)) +
+  geom_point() +
+  labs(title = 'Glycosylated haemoglobin vs. Systolic blood pressure')
+```
+
+```{r}
+ggplot(data_clean, aes(x = bp.1d, y = glyhb)) +
+  geom_point() +
+  labs(title = 'Glycosylated haemoglobin vs. Diastolic blood pressure')
+```
+
+The charts do not show a clear relationship between high blood pressure and HbA1c levels. This is confirmed numerically with a chi-square test:
+
+```{r}
+# Subset of individuals with systolic blood pressure >= 140
+data_hypertension <- subset(data_clean, bp.1s >= 140)
+
+# Variable indicating whether diastolic blood pressure is >= 90
+data_hypertension$hypertension <- data_hypertension$bp.1d >= 90
+
+# Chi-square test between hypertension and diabetes diagnosis
+table_hypertension <- table(data_hypertension$diagnostico, data_hypertension$hypertension)
+chisq.test(table_hypertension)
+
+# Conclusion: The HbA1c vs. blood pressure charts show no clear relationship between hypertension and diabetes. The chi-square test confirms that there is no significant association (p = 0.48) between elevated blood pressure and a diabetes diagnosis in this population. Therefore, in this African American population of Central Virginia, no pattern consistent with "Syndrome X" combining hypertension and Type II diabetes is observed.
+```
+
+### 5. Age and metabolic progression: How does age relate to HbA1c, stabilised glucose and blood pressure? Is a progressive increase in metabolic risk with age observed in this population?
+
+```{r}
+ggplot(data_clean, aes(x = age, y = glyhb)) +
+  geom_point() +
+  labs(title = 'Glycosylated haemoglobin vs. Age')
+```
+
+```{r, message=FALSE}
+library(patchwork)
+
+p1 <- ggplot(data_clean, aes(x = age, y = bp.1s)) +
+  geom_point() +
+  labs(title = 'Systolic blood pressure vs. Age')
+
+p2 <- ggplot(data_clean, aes(x = age, y = bp.1d)) +
+  geom_point() +
+  labs(title = 'Diastolic blood pressure vs. Age')
+
+p1 + p2
+
+# Conclusion: Glycosylated haemoglobin levels do increase slightly with age, consistent with what was observed in the clustering section, where age was one of the differentiating variables for the high-risk cluster. Diastolic blood pressure does not appear to be directly related to age, whereas systolic blood pressure shows a tendency to increase with age.
+```
+
+### 6. Postprandial time and biomarkers: Does postprandial time (time.ppn) influence stabilised glucose levels? And HbA1c?
+
+```{r}
+ggplot(data_clean, aes(x = time.ppn, y = stab.glu)) +
+  geom_point() +
+  labs(title = 'Relationship between glucose and postprandial time')
+
+# Conclusion: Stabilised glucose decreases as postprandial time increases.
+```
+
+```{r}
+ggplot(data_clean, aes(x = time.ppn, y = glyhb)) +
+  geom_point() +
+  labs(title = 'Relationship between HbA1c and postprandial time')
+
+# Conclusion: No clear relationship is observed between glycosylated haemoglobin and postprandial time, although there does appear to be a decrease in the maximum values reached as time increases. Since postprandial time has been identified as a predictor of HbA1c levels, it would be advisable in future studies to collect samples from individuals at a standardised time since their last meal.
+```
+
+### 7. Sex differences in metabolic risk: Are there significant differences between men and women in HbA1c, stabilised glucose and blood pressure?
+
+```{r, message=FALSE}
+boxplot(data_clean$glyhb ~ data_clean$gender,
+        xlab = 'Gender', ylab = 'HbA1c',
+        names = c('Men', 'Women'))
+
+# Conclusion: No difference is observed between men and women in glycosylated haemoglobin levels.
+```
+
+```{r}
+boxplot(data_clean$stab.glu ~ data_clean$gender,
+        xlab = 'Gender', ylab = 'Stabilised glucose',
+        names = c('Men', 'Women'))
+
+# Conclusion: No difference is observed between men and women in stabilised glucose levels.
+```
+
+```{r}
+par(mfrow = c(1, 2))
+
+boxplot(data_clean$bp.1d ~ data_clean$gender,
+        xlab = '', ylab = 'Diastolic blood pressure',
+        names = c('Men', 'Women'))
+
+boxplot(data_clean$bp.1s ~ data_clean$gender,
+        xlab = '', ylab = 'Systolic blood pressure',
+        names = c('Men', 'Women'))
+
+# Conclusion: No differences in blood pressure values are observed between men and women.
+```
+
+## ***4.2 Advanced Segmentation***
+
+### 4. Using clustering on variables such as glucose, HbA1c, cholesterol, HDL, blood pressure, waist/hip ratio and age, can subgroups of patients with distinct metabolic and cardiovascular risk profiles be identified?
+
+To identify risk subgroups, unsupervised clustering is the most appropriate approach:
+
+```{r}
+# Set the seed for reproducibility of random results
+set.seed(999)
+
+# Select the relevant variables for clustering
+var_cluster <- data_clean[, c('stab.glu','glyhb','chol','hdl','bp.1s','bp.1d','waist_hip','age')]
+
+# Standardise the variables to have mean 0 and standard deviation 1
+# This prevents variables with large ranges from dominating the clustering
+var_cluster <- scale(var_cluster)
+
+# Apply k-means clustering:
+# - centers = 3: we want 3 clusters/subgroups
+# - nstart = 100: try 100 random initialisations and keep the best
+kmeans_result <- kmeans(var_cluster, centers = 3, nstart = 100)
+
+# Store the cluster assignment for each patient in the original dataset
+data_clean$cluster <- kmeans_result$cluster
+
+# Cross-tabulate cluster and diagnosis to see how many diabetic individuals are in each cluster
+table(data_clean$cluster, data_clean$diagnostico)
+```
+
+```{r}
+data_clean %>%
+  
+  # Group data by previously assigned cluster
+  group_by(cluster) %>%
+  
+  # Calculate the proportion of diabetic patients in each cluster
+  # mean(diagnostico) assumes 'diagnostico' is 1 if diabetic, 0 if healthy
+  # na.rm = TRUE ignores missing values
+  summarise(proportion_diabetic = mean(diagnostico, na.rm = TRUE)) %>%
+  
+  # Bar chart with ggplot2
+  ggplot(aes(x = factor(cluster), y = proportion_diabetic)) +
+  geom_col() +
+  labs(
+    x = 'Cluster',
+    y = 'Proportion of diabetic individuals',
+    title = 'Clinical risk by cluster'
+  )
+
+# Conclusion: The identified clusters show clear differences in diabetes risk within the population. Cluster 1 has a very high proportion of diabetic individuals (~90%), classifying it as high metabolic risk. Cluster 2 has almost all healthy individuals (~0.8% with diabetes), representing low risk, while Cluster 3 shows intermediate risk (~11%), corresponding to moderate risk. This demonstrates that clustering based on metabolic and anthropometric variables can effectively identify subgroups of patients with distinct metabolic and cardiovascular risk profiles.
+```
+
+# ***5. Interactive Visualisation Tool with Shiny***
+
+```{r}
+# Remove the cluster and waist/hip ratio variables, as they were used only for this analysis
+data_clean <- data_clean %>%
+  select(-cluster, -waist_hip)
+```
+
+```{r}
+# Convert location, gender and diagnosis back to readable labels
+data_clean$location   <- ifelse(data_clean$location == 1, 'Buckingham', 'Louisa')
+data_clean$gender     <- ifelse(data_clean$gender == 1, 'Male', 'Female')
+data_clean$diagnostico <- ifelse(data_clean$diagnostico == 1, 'Diabetic', 'Healthy')
+```
+
+```{r}
+library(shiny)
+library(DT)
+
+ui <- fluidPage(
+  titlePanel('Type II Diabetes Mellitus Dataset'),
+  sidebarLayout(
+    sidebarPanel(
+      tags$a(href = 'https://hbiostat.org/data/repo/cdiabetes', 'View dataset information', target = '_blank'),
+      checkboxGroupInput('gender',    'Gender',    choices = unique(data_clean$gender),     selected = unique(data_clean$gender)),
+      checkboxGroupInput('location',  'Location',  choices = unique(data_clean$location),   selected = unique(data_clean$location)),
+      checkboxGroupInput('diagnosis', 'Diagnosis', choices = unique(data_clean$diagnostico), selected = unique(data_clean$diagnostico)),
+      sliderInput('age', 'Age range', min = min(data_clean$age), max = max(data_clean$age),
+                  value = c(min(data_clean$age), max(data_clean$age)))
+    ),
+    mainPanel(
+      DTOutput('table'),
+      h4('Statistical summary of the displayed data'),
+      verbatimTextOutput('summary')
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  filtered_data <- reactive({
+    data_clean |>
+      dplyr::filter(
+        gender     %in% input$gender,
+        location   %in% input$location,
+        diagnostico %in% input$diagnosis,
+        age >= input$age[1],
+        age <= input$age[2]
+      )
+  })
+
+  output$table <- renderDT({
+    filtered_data()
+  })
+
+  output$summary <- renderPrint({
+    summary(filtered_data())
+  })
+}
+
+shinyApp(ui = ui, server = server)
+```
