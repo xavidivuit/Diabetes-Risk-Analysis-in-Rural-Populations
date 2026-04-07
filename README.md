@@ -1,4 +1,4 @@
-# Analysis of Type 2 Diabetes in Rural Populations
+# Diabetes Risk Analysis in Rural Populations
 
 An R Markdown analysis of Type II diabetes risk factors in a rural African American population from Central Virginia, based on clinical, anthropometric and biochemical data.
 
